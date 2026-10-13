@@ -9,7 +9,7 @@ class Planner:
     WHEELBASE = 0.324
     MAX_STEERING_RAD = 0.5236
 
-    def __init__(self, path_csv, target_speed=0.5):
+    def __init__(self, path_csv, target_speed=0.55):
         self.path = []
 
         with open(path_csv, "r", newline="") as file:
@@ -38,7 +38,7 @@ class Planner:
         self.last_index = nearest
 
         # Choose a lookahead distance, increasing slightly with speed.
-        lookahead = max(0.6, 0.6 + 0.3 * abs(speed))
+        lookahead = max(1.1, 1.1 + 0.3 * abs(speed))
         target_index = nearest
         travelled = 0.0
 
