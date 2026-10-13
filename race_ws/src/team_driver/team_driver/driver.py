@@ -68,6 +68,8 @@ import math
 
 import numpy as np
 import rclpy
+import os
+from team_driver.planner import Planner
 from geometry_msgs.msg import Point
 from nav_msgs.msg import Odometry
 from rclpy.node import Node
@@ -127,6 +129,13 @@ class Driver(Node):
         self.position = None      # (x, y) in the `world` frame
         self.yaw = 0.0            # [rad]
         self.speed = 0.0          # [m/s]
+        self.filtered_speed = 0.0
+        self.last_steering = 0.0
+
+        self.planner = Planner(
+            "/hackathon/maps/icra26_compete_centerline.csv",
+            target_speed=0.5,
+        )
 
         self._marker_divisor = 0
         self.get_logger().warn(
@@ -137,11 +146,29 @@ class Driver(Node):
     # Where the car is. Free, accurate, and worth building on.
     # ------------------------------------------------------------------
     def odom_callback(self, msg):
-        self.position = (msg.pose.pose.position.x, msg.pose.pose.position.y)
+        self.position = (
+            msg.pose.pose.position.x,
+            msg.pose.pose.position.y
+        )
+
         q = msg.pose.pose.orientation
-        self.yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
-                              1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-        self.speed = math.hypot(msg.twist.twist.linear.x, msg.twist.twist.linear.y)
+        self.yaw = math.atan2(
+            2.0 * (q.w * q.z + q.x * q.y),
+            1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        )
+
+        measured_speed = math.hypot(
+            msg.twist.twist.linear.x,
+            msg.twist.twist.linear.y
+        )
+
+        # Smooth speed changes across odometry messages.
+        alpha = 0.20
+        self.filtered_speed = (
+            alpha * measured_speed
+            + (1.0 - alpha) * self.filtered_speed
+        )
+        self.speed = self.filtered_speed
 
     def ips_callback(self, msg):
         """Position alone, at the same rate. /odom carries this plus velocity."""
@@ -177,24 +204,28 @@ class Driver(Node):
     # THIS IS THE PART YOU WRITE.
     # ==================================================================
     def plan(self, ranges, angles):
-        """Decide what the car should do, given the latest scan.
+        """Follow the centreline with smoothed steering."""
+        if self.position is None:
+            return 0.0, 0.0
 
-        Returns `(steering, throttle)`, both normalised to [-1, 1]. Steering
-        is a fraction of full lock (MAX_STEERING_RAD); throttle is torque, not
-        speed.
+        x, y = self.position
+        steering, target_speed = self.planner.step(
+            x, y, self.yaw, self.speed
+        )
 
-        Right now it returns "straight ahead, slowly", which is not driving:
-        it ignores `ranges` entirely, so the car will hold its heading off the
-        line and put itself into the first barrier it meets. Replace the whole
-        method.
+        # Smooth abrupt steering changes.
+        steering = float(np.clip(steering, -1.0, 1.0))
+        smoothing = 0.25
+        steering = (
+            smoothing * steering
+            + (1.0 - smoothing) * self.last_steering
+        )
+        self.last_steering = steering
 
-        You have more to work with than the scan. `self.position`, `self.yaw`
-        and `self.speed` are ground truth from /odom and are yours to use, and
-        nothing stops you subscribing to more topics, loading a map or a line
-        you computed offline, or running a policy you trained. See
-        docs/04-algorithms.md for the approaches and what each one needs.
-        """
-        return 0.0, self.crawl_throttle
+        # Conservative throttle control.
+        throttle = 0.10
+
+        return steering, throttle
 
     # ------------------------------------------------------------------
     # Output
