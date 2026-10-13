@@ -23,18 +23,43 @@ class Planner:
             raise ValueError("Centreline CSV must contain at least two points")
 
         self.target_speed = float(target_speed)
-        self.last_index = 0
+        self.last_index = None
 
     def step(self, x, y, yaw, speed):
         """Return (normalised steering, target speed)."""
         n = len(self.path)
 
-        # Search nearby points first, allowing the search to wrap around.
-        nearest = min(
-            range(n),
-            key=lambda i: (self.path[i][0] - x) ** 2
-                         + (self.path[i][1] - y) ** 2
-        )
+        # Search globally on startup, then locally around the previous index.
+        if self.last_index is None:
+            nearest = min(
+                range(n),
+                key=lambda i: (self.path[i][0] - x) ** 2
+                             + (self.path[i][1] - y) ** 2
+            )
+        else:
+            window = 20
+            candidates = {
+                (self.last_index + offset) % n
+                for offset in range(-window, window + 1)
+            }
+            nearest = min(
+                candidates,
+                key=lambda i: (self.path[i][0] - x) ** 2
+                             + (self.path[i][1] - y) ** 2
+            )
+
+            # Recover globally if the local result is over 2 m away.
+            distance_sq = (
+                (self.path[nearest][0] - x) ** 2
+                + (self.path[nearest][1] - y) ** 2
+            )
+            if distance_sq > 4.0:
+                nearest = min(
+                    range(n),
+                    key=lambda i: (self.path[i][0] - x) ** 2
+                                 + (self.path[i][1] - y) ** 2
+                )
+
         self.last_index = nearest
 
         # Choose a lookahead distance, increasing slightly with speed.
