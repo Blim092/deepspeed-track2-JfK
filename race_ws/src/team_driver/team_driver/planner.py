@@ -1,7 +1,7 @@
-
 import csv
 import math
 
+from team_driver.speed_profile import build_speed_profile
 
 class Planner:
     """Follow a closed-loop centreline using pure pursuit."""
@@ -24,6 +24,8 @@ class Planner:
 
         self.target_speed = float(target_speed)
         self.last_index = None
+
+        self.curvature, self.speed_profile = build_speed_profile(self.path)
 
     def step(self, x, y, yaw, speed):
         """Return (normalised steering, target speed)."""
@@ -97,20 +99,57 @@ class Planner:
         steering = delta / self.MAX_STEERING_RAD
         steering = max(-1.0, min(1.0, steering))
 
-        return steering, self.target_speed
+        window = 5
+        upcoming_speeds = [
+            self.speed_profile[(nearest + offset) % n]
+            for offset in range (window + 1)
+        ]
+        profile_speed = min(upcoming_speeds)
+        target_speed = min(self.target_speed, profile_speed)
+
+        return steering, target_speed
 
     def path_ahead(self, x, y, yaw, n):
-        """Return upcoming centreline points in world coordinates."""
+        """Return the next n centreline points in world coordinates."""
         if n <= 0:
             return []
 
-        nearest = min(
-            range(len(self.path)),
-            key=lambda i: (self.path[i][0] - x) ** 2
-                         + (self.path[i][1] - y) ** 2
-        )
+        path_length = len(self.path)
+
+        if self.last_index is None:
+            nearest = min(
+                range(path_length),
+                key=lambda i: (self.path[i][0] - x) ** 2
+                             + (self.path[i][1] - y) ** 2
+            )
+        else:
+            window = 20
+            candidates = {
+                (self.last_index + offset) % path_length
+                for offset in range(-window, window + 1)
+            }
+
+            nearest = min(
+                candidates,
+                key=lambda i: (self.path[i][0] - x) ** 2
+                             + (self.path[i][1] - y) ** 2
+            )
+
+            distance_sq = (
+                (self.path[nearest][0] - x) ** 2
+                + (self.path[nearest][1] - y) ** 2
+            )
+
+            if distance_sq > 4.0:
+                nearest = min(
+                    range(path_length),
+                    key=lambda i: (self.path[i][0] - x) ** 2
+                                 + (self.path[i][1] - y) ** 2
+                )
+
+        self.last_index = nearest
 
         return [
-            self.path[(nearest + offset) % len(self.path)]
+            self.path[(nearest + offset) % path_length]
             for offset in range(1, n + 1)
         ]
