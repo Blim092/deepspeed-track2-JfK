@@ -1,70 +1,33 @@
 #!/usr/bin/env python3
-"""YOUR DRIVER GOES HERE.
+"""Team driver - integration wiring. OWNED BY ROLE 1; nobody else edits this file.
 
-This is the node the judges run. Keep `driver` as the executable name and keep
-publishing to the two AutoDRIVE command topics; everything else is yours to
-change - rewrite this file completely if you want to.
+Per LiDAR scan (40 Hz):
 
---------------------------------------------------------------------------
-THIS TEMPLATE DOES NOT DRIVE
---------------------------------------------------------------------------
-It is wiring, not a driver. It connects to the simulator, subscribes to the
-sensors, and then publishes a slow constant throttle with the wheels straight.
-It will roll forward off the line and into the first thing in front of it.
-That is deliberate and it is the whole point: **there is no algorithm here and
-no algorithm is shipped anywhere else in this repository.** Writing one is the
-hackathon.
+    decide   planner (mode='planner') or reactive (mode='reactive')
+    fallback planner -> reactive when Safety says the planned line is blocked
+    safety   cap the target speed from the clearance ahead
+    speed    SpeedController turns the target speed into a throttle
+    publish  steering and throttle, clamped to [-1, 1], never NaN
 
-What the template is good for is proving your setup works. If the car moves
-when you run it, then the image, the bridge, the QoS settings, the workspace
-and your commands are all correct, and every problem left is yours.
+The modules live in their own files, one owner each:
 
-    ros2 run team_driver driver
-    ros2 launch team_driver driver.launch.py
+    speed_controller.py  Role 2      reactive.py  Role 3
+    planner.py           Role 4      safety.py    Role 5
+    common.py            Role 1
 
-`docs/04-algorithms.md` lists the approaches worth starting from - reactive
-ones that need nothing but the LiDAR, planners that follow a line, model-based
-control, and learned policies - with what each needs and where each breaks.
-Pick one and replace `plan()` below.
+Rules this file keeps (see docs/06-rules.md):
+  * `ros2 run team_driver driver` stays the entry point.
+  * Every default lives HERE, in code: judging runs plain `ros2 run` with no
+    arguments and no yaml.
+  * Nothing here ever publishes /autodrive/reset_command.
 
---------------------------------------------------------------------------
-THE CONTROL INTERFACE IS NOT A SPEED REQUEST
---------------------------------------------------------------------------
-AutoDRIVE takes a normalised throttle, not a target speed:
-
+AutoDRIVE takes normalised throttle, not speed:
     /autodrive/roboracer_1/throttle_command   Float32, [-1, 1]
     /autodrive/roboracer_1/steering_command   Float32, [-1, 1]  ->  +-0.5236 rad
-
--1 is full reverse, 0 is coasting, +1 is full torque. There is no speed
-controller between you and the motor, so "go at 3 m/s" is a control problem you
-now own. Whatever algorithm you pick will decide a *target* speed; turning that
-into a throttle is a separate job, and it is worth several seconds a lap. See
-`docs/04-algorithms.md` §4.1.
-
---------------------------------------------------------------------------
-WHAT YOU MAY READ  (see docs/06-rules.md)
---------------------------------------------------------------------------
-    .../lidar            1080 beams over 270 deg, 0.06-10 m
-    .../imu              orientation, angular velocity, linear acceleration
-    .../left_encoder     wheel angle, 16 PPR x 120
-    .../right_encoder
-    .../front_camera     RGB image (headless runs do not produce one)
-    .../throttle         actuator feedback
-    .../steering
-    .../ips              ground-truth position - ALLOWED here, see below
-    .../odom             ground-truth pose and velocity - ALLOWED, RECOMMENDED
-    .../lap_count        .../lap_time  .../last_lap_time  .../best_lap_time
-    .../collision_count
-    /tf, /tf_static
-
-The AutoDRIVE competition rules mark the pose and race-telemetry topics
-"restricted": legal for development, not at race time. **The hackathon does not
-adopt that restriction for reading.** Every input above is yours to use during
-a scored run, ground-truth pose included. What stays restricted is *publishing*
-`/autodrive/reset_command`, which is the referee's (rule 31).
 """
 
 import math
+import time
 
 import numpy as np
 import rclpy
@@ -77,6 +40,16 @@ from sensor_msgs.msg import LaserScan
 from std_msgs.msg import Float32
 from visualization_msgs.msg import Marker, MarkerArray
 
+from team_driver import planner as planner_mod
+from team_driver import reactive as reactive_mod
+from team_driver import safety as safety_mod
+from team_driver import speed_controller as speed_mod
+from team_driver.common import finite_or, world_to_car
+from team_driver.planner import Planner
+from team_driver.reactive import Reactive
+from team_driver.safety import Safety
+from team_driver.speed_controller import SpeedController
+
 # The steering command is normalised; this is what +-1.0 actually means.
 MAX_STEERING_RAD = 0.5236
 
@@ -85,8 +58,7 @@ def devkit_qos() -> QoSProfile:
     """Match the QoS the AutoDRIVE bridge publishes and subscribes with.
 
     RELIABLE / KEEP_LAST(1) / VOLATILE. Get this wrong and the topics simply do
-    not connect: a BEST_EFFORT subscriber will never see a RELIABLE publisher's
-    messages, and `ros2 topic list` will still cheerfully show the topic.
+    not connect, and `ros2 topic list` still shows them.
     """
     return QoSProfile(
         durability=QoSDurabilityPolicy.VOLATILE,
@@ -98,18 +70,29 @@ def devkit_qos() -> QoSProfile:
 
 class Driver(Node):
 
+    NOMINAL_DT = 0.025   # [s] 40 Hz, used when message time is unusable
+
     def __init__(self):
         super().__init__('driver')
 
-        # Declared parameters can be retuned without editing code:
-        #   ros2 run team_driver driver --ros-args -p crawl_throttle:=0.3
-        # Add your own as you go; config/driver_params.yaml loads them.
+        # Defaults live in code. Retune from the command line if you like:
+        #   ros2 run team_driver driver --ros-args -p mode:=planner
         self.declare_parameter('vehicle_ns', '/autodrive/roboracer_1')
-        self.declare_parameter('crawl_throttle', 0.12)    # [-1, 1], open loop
-        self.declare_parameter('max_range', 10.0)         # [m] clip the scan here
+        self.declare_parameter('mode', 'reactive')           # or 'planner'
+        self.declare_parameter('max_range', 10.0)            # [m] clip the scan
+        self.declare_parameter('fault_throttle', 0.0)        # used if a step raises
+        self.declare_parameter('callback_budget_s', 0.025)   # 40 Hz = 25 ms
+        self.declare_parameter('path_points', 40)            # points for the blocked check
 
-        self.crawl_throttle = self.get_parameter('crawl_throttle').value
-        self.max_range = self.get_parameter('max_range').value
+        self.mode = str(self.get_parameter('mode').value)
+        if self.mode not in ('reactive', 'planner'):
+            self.get_logger().warn(
+                f"unknown mode '{self.mode}', using 'reactive'")
+            self.mode = 'reactive'
+        self.max_range = float(self.get_parameter('max_range').value)
+        self.fault_throttle = float(self.get_parameter('fault_throttle').value)
+        self.budget = float(self.get_parameter('callback_budget_s').value)
+        self.path_points = int(self.get_parameter('path_points').value)
 
         ns = str(self.get_parameter('vehicle_ns').value).rstrip('/')
         qos = devkit_qos()
@@ -122,19 +105,34 @@ class Driver(Node):
         self.create_subscription(Odometry, f'{ns}/odom', self.odom_callback, qos)
         self.create_subscription(Point, f'{ns}/ips', self.ips_callback, qos)
 
-        # Latest known pose and speed. Ground truth from the simulator, which
-        # the hackathon rules allow you to use - so use it.
+        # The four modules, each owned by one teammate.
+        self.reactive = Reactive(max_range=self.max_range)
+        self.planner = Planner()
+        self.safety = Safety()
+        self.speed_ctrl = SpeedController()
+
+        # Latest ground-truth pose and speed from /odom.
         self.position = None      # (x, y) in the `world` frame
         self.yaw = 0.0            # [rad]
         self.speed = 0.0          # [m/s]
 
+        self._last_t = None
+        self._source = None
         self._marker_divisor = 0
-        self.get_logger().warn(
-            'team_driver is up, but this template has no driving logic: it will '
-            'crawl straight ahead until it hits something. Implement plan().')
+        self._cb_count = 0
+        self._cb_worst = 0.0
+
+        stubs = [name for name, mod in (
+            ('speed_controller', speed_mod), ('reactive', reactive_mod),
+            ('planner', planner_mod), ('safety', safety_mod))
+            if getattr(mod, 'IS_STUB', False)]
+        self.get_logger().info(f"team_driver up, mode='{self.mode}'")
+        if stubs:
+            self.get_logger().warn(
+                'still STUBS (not driving yet): ' + ', '.join(stubs))
 
     # ------------------------------------------------------------------
-    # Where the car is. Free, accurate, and worth building on.
+    # Inputs
     # ------------------------------------------------------------------
     def odom_callback(self, msg):
         self.position = (msg.pose.pose.position.x, msg.pose.pose.position.y)
@@ -147,61 +145,88 @@ class Driver(Node):
         """Position alone, at the same rate. /odom carries this plus velocity."""
         self.position = (msg.x, msg.y)
 
+    def _dt(self, scan):
+        """Seconds since the previous scan, from MESSAGE time.
+
+        The simulator can run slower than real time (about half speed on some
+        laptops), so wall-clock dt would be wrong for the controllers. Falls
+        back to wall clock only if the message carries no usable stamp.
+        """
+        stamp = scan.header.stamp
+        t = stamp.sec + stamp.nanosec * 1e-9
+        if t <= 0.0:
+            t = time.monotonic()
+        dt = self.NOMINAL_DT if self._last_t is None else t - self._last_t
+        self._last_t = t
+        if not (1e-3 <= dt <= 0.2):    # first call, stamp jump, or a pause
+            dt = self.NOMINAL_DT
+        return dt
+
     # ------------------------------------------------------------------
-    # The control loop, once per LiDAR scan (40 Hz).
+    # The control loop, once per LiDAR scan.
     # ------------------------------------------------------------------
     def scan_callback(self, scan):
-        ranges, angles = self.preprocess(scan)
-        steering, throttle = self.plan(ranges, angles)
+        t0 = time.perf_counter()
+        try:
+            dt = self._dt(scan)
+            steering, throttle = self.control(scan, dt)
+        except Exception as exc:    # a dead node would leave the last command running
+            steering, throttle = 0.0, self.fault_throttle
+            self.get_logger().error(
+                f'control step failed, publishing fault command: {exc!r}',
+                throttle_duration_sec=2.0)
+
         self.publish(steering, throttle)
 
         self._marker_divisor = (self._marker_divisor + 1) % 10
         if self._marker_divisor == 0:
-            self.publish_marker(steering * MAX_STEERING_RAD)
+            self.publish_marker(finite_or(steering) * MAX_STEERING_RAD)
 
-    def preprocess(self, scan):
-        """Turn a raw scan into clean ranges plus the angle of each beam.
+        elapsed = time.perf_counter() - t0
+        self._cb_worst = max(self._cb_worst, elapsed)
+        self._cb_count += 1
+        if elapsed > self.budget:
+            self.get_logger().warn(
+                f'callback took {elapsed * 1000:.1f} ms '
+                f'(budget {self.budget * 1000:.0f} ms)',
+                throttle_duration_sec=5.0)
+        if self._cb_count % 400 == 0:
+            self.get_logger().info(
+                f'worst callback in last 400 scans: {self._cb_worst * 1000:.1f} ms')
+            self._cb_worst = 0.0
 
-        Kept because every approach needs some version of it and the details
-        are fiddly rather than interesting: the LiDAR reports NaN and inf, and
-        arithmetic on those propagates silently through everything downstream.
-        """
-        ranges = np.asarray(scan.ranges, dtype=np.float64)
-        ranges = np.nan_to_num(ranges, nan=0.0, posinf=self.max_range, neginf=0.0)
-        ranges = np.clip(ranges, 0.0, self.max_range)
+    def control(self, scan, dt):
+        """decide -> fallback -> safety cap -> speed controller."""
+        source = 'reactive'
+        if self.mode == 'planner' and self.position is not None:
+            x, y = self.position
+            steering, v_target = self.planner.step(x, y, self.yaw, self.speed)
+            source = 'planner'
+            path = self.planner.path_ahead(x, y, self.yaw, self.path_points)
+            car_path = world_to_car(path, x, y, self.yaw)
+            if self.safety.line_blocked(car_path, scan):
+                steering, v_target = self.reactive.step(scan)
+                source = 'reactive (line blocked)'
+        else:
+            steering, v_target = self.reactive.step(scan)
 
-        angles = scan.angle_min + np.arange(len(ranges)) * scan.angle_increment
-        return ranges, angles
+        if source != self._source:
+            self.get_logger().info(f'steering source: {source}')
+            self._source = source
 
-    # ==================================================================
-    # THIS IS THE PART YOU WRITE.
-    # ==================================================================
-    def plan(self, ranges, angles):
-        """Decide what the car should do, given the latest scan.
-
-        Returns `(steering, throttle)`, both normalised to [-1, 1]. Steering
-        is a fraction of full lock (MAX_STEERING_RAD); throttle is torque, not
-        speed.
-
-        Right now it returns "straight ahead, slowly", which is not driving:
-        it ignores `ranges` entirely, so the car will hold its heading off the
-        line and put itself into the first barrier it meets. Replace the whole
-        method.
-
-        You have more to work with than the scan. `self.position`, `self.yaw`
-        and `self.speed` are ground truth from /odom and are yours to use, and
-        nothing stops you subscribing to more topics, loading a map or a line
-        you computed offline, or running a policy you trained. See
-        docs/04-algorithms.md for the approaches and what each one needs.
-        """
-        return 0.0, self.crawl_throttle
+        v_target = finite_or(v_target, 0.0)
+        v_target = finite_or(self.safety.limit(v_target, scan), 0.0)
+        throttle = self.speed_ctrl.step(v_target, self.speed, dt)
+        return finite_or(steering), finite_or(throttle)
 
     # ------------------------------------------------------------------
     # Output
     # ------------------------------------------------------------------
     def publish(self, steering, throttle):
-        self.steering_pub.publish(Float32(data=float(np.clip(steering, -1.0, 1.0))))
-        self.throttle_pub.publish(Float32(data=float(np.clip(throttle, -1.0, 1.0))))
+        steering = float(np.clip(finite_or(steering), -1.0, 1.0))
+        throttle = float(np.clip(finite_or(throttle), -1.0, 1.0))
+        self.steering_pub.publish(Float32(data=steering))
+        self.throttle_pub.publish(Float32(data=throttle))
 
     def publish_marker(self, target_angle):
         """Draw where the car thinks it is going. Add /driver/markers in RViz."""
