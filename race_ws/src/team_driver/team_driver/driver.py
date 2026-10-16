@@ -133,7 +133,7 @@ class Driver(Node):
         self.last_steering = 0.0
 
         self.planner = Planner(
-            "/hackathon/maps/icra26_compete_centerline.csv",
+            "/hackathon/maps/icra26_compete_handdrawn_safe.csv",
             target_speed=0.5,
         )
 
