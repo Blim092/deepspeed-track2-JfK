@@ -111,7 +111,7 @@ class Driver(Node):
         self.reactive = Reactive(max_range=self.max_range)
         self.planner = Planner(
             "/hackathon/maps/icra26_compete_racingline_apex_reconstructed.csv",
-            target_speed=3.5,
+            target_speed=6.5,
         )
         self.safety = Safety()
         self.speed_ctrl = SpeedController()
@@ -242,8 +242,13 @@ class Driver(Node):
             self._source = source
 
         v_target = finite_or(v_target, 0.0)
+        v_plan = v_target                       # what the planner/reactive asked for
         v_target = finite_or(self.safety.limit(v_target, scan), 0.0)
         throttle = self.speed_ctrl.step(v_target, self.speed, dt)
+        self.get_logger().info(
+            f'src={source} v_plan={v_plan:.2f} v_safe={v_target:.2f} '
+            f'v={self.speed:.2f} thr={throttle:.2f}',
+            throttle_duration_sec=0.2)
         return finite_or(steering), finite_or(throttle)
     # ==================================================================
     # THIS IS THE PART YOU WRITE.

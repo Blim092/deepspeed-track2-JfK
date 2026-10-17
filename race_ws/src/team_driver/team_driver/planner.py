@@ -9,29 +9,45 @@ class Planner:
     WHEELBASE = 0.324
     MAX_STEERING_RAD = 0.5236
 
-    def __init__(self, path_csv, target_speed=0.55):
-        self.path = []
-
+    def __init__(self, path_csv, target_speed=6.5,
+                 max_lateral_accel=6.5, max_accel=1.6,
+                 max_brake=0.75, max_speed=5.0):
+        raw = []
         with open(path_csv, "r", newline="") as file:
             for row in csv.reader(file):
-                if not row or row[0].strip().startswith("#"):
+                if not row or row[0].strip().startswith("#") or len(row) < 2:
                     continue
-                if len(row) >= 2:
-                    self.path.append((float(row[0]), float(row[1])))
+                try:
+                    raw.append((float(row[0]), float(row[1])))
+                except ValueError:
+                    continue  # skip a header row such as "x_m,y_m"
 
-        if len(self.path) < 2:
-            raise ValueError("Centreline CSV must contain at least two points")
+        # Drop consecutive duplicates, including a closing point equal to the first.
+        self.path = []
+        for p in raw:
+            if not self.path or math.hypot(p[0] - self.path[-1][0],
+                                           p[1] - self.path[-1][1]) > 1e-6:
+                self.path.append(p)
+        if len(self.path) > 1 and math.hypot(
+                self.path[0][0] - self.path[-1][0],
+                self.path[0][1] - self.path[-1][1]) <= 1e-6:
+            self.path.pop()
+        if len(self.path) < 5:
+            raise ValueError("Centreline CSV needs at least five distinct points")
+
+        if len(self.path) < 5:
+            raise ValueError("Centreline CSV needs at least five distinct points")
 
         self.target_speed = float(target_speed)
         self.last_index = None
-
         self.curvature, self.speed_profile = build_speed_profile(
             self.path,
-            max_lateral_accel=0.65,
-            max_accel=1.2,
-            max_brake=0.65,
-            max_speed=3.5,
+            max_lateral_accel=max_lateral_accel,
+            max_accel=max_accel,
+            max_brake=max_brake,
+            max_speed=max_speed,
         )
+        
     def step(self, x, y, yaw, speed):
         """Return (normalised steering, target speed)."""
         n = len(self.path)

@@ -14,17 +14,17 @@ IS_STUB = False
 
 class SpeedController:
 
-    def __init__(self, ff_throttle_per_mps=0.04, max_throttle=1.0):
+    def __init__(self, ff_throttle_per_mps=0.05, max_throttle=0.5):
         # PLACEHOLDERS, NOT MEASURED. 0.12 per m/s reproduces the template's
         # constant crawl throttle (0.12) at a 1.0 m/s target. Role 2 replaces
         # these with the identified throttle-to-speed relationship.
         self.ff_throttle_per_mps = ff_throttle_per_mps
         
 
-        self.kp = 0.20
-        self.ki = 0.03
+        self.kp = 0.05
+        self.ki = 0.04
 
-        self.max_int = 0.10
+        self.max_int = 2.0
         self.int_err = 0.0
         self.max_throttle = max_throttle
 
@@ -51,7 +51,7 @@ class SpeedController:
         
         throttle = ff + p_out + i_out
         
-        return float(max(-1.0, min(self.max_throttle, throttle)))
+        return float(max(0.0, min(self.max_throttle, throttle)))
 
     def reset(self):
         """Clear internal state (the integral). Called when a run restarts."""
