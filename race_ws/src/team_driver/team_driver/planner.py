@@ -1,155 +1,41 @@
-import csv
-import math
+"""Planner - OWNED BY ROLE 4.
 
-from team_driver.speed_profile import build_speed_profile
+Path tracking on a known line (pure pursuit on the centreline, then a
+curvature-based speed profile, then a racing line from the map).
+
+This is a STUB: it returns straight ahead at a fixed low speed and an empty
+path. Replace the methods, keep the class name and signatures, and set
+IS_STUB = False when it really tracks a line.
+
+Facts you need:
+    Pure pursuit: delta = atan2(2 * L * sin(alpha), Ld), L = 0.324 m.
+    steering = delta / 0.5236, clamped to [-1, 1].
+    Map: maps/icra26_compete.pgm (220 x 476 cells, 5 cm).
+    Centreline: maps/icra26_compete_centerline.csv (check its columns).
+    Lap length 54.4 m. Check which point /odom reports before trusting it.
+"""
+
+IS_STUB = True
+
 
 class Planner:
-    """Follow a closed-loop centreline using pure pursuit."""
 
-    WHEELBASE = 0.324
-    MAX_STEERING_RAD = 0.5236
-
-    def __init__(self, path_csv, target_speed=0.55):
-        self.path = []
-
-        with open(path_csv, "r", newline="") as file:
-            for row in csv.reader(file):
-                if not row or row[0].strip().startswith("#"):
-                    continue
-                if len(row) >= 2:
-                    self.path.append((float(row[0]), float(row[1])))
-
-        if len(self.path) < 2:
-            raise ValueError("Centreline CSV must contain at least two points")
-
-        self.target_speed = float(target_speed)
-        self.last_index = None
-
-        self.curvature, self.speed_profile = build_speed_profile(self.path)
+    def __init__(self, path_csv=None, crawl_speed=1.0):
+        self.path_csv = path_csv         # Role 4: load the line here
+        self.crawl_speed = crawl_speed   # [m/s] stub target speed
 
     def step(self, x, y, yaw, speed):
-        """Return (normalised steering, target speed)."""
-        n = len(self.path)
+        """Return (steering, target_speed).
 
-        # Search globally on startup, then locally around the previous index.
-        if self.last_index is None:
-            nearest = min(
-                range(n),
-                key=lambda i: (self.path[i][0] - x) ** 2
-                             + (self.path[i][1] - y) ** 2
-            )
-        else:
-            window = 20
-            candidates = {
-                (self.last_index + offset) % n
-                for offset in range(-window, window + 1)
-            }
-            nearest = min(
-                candidates,
-                key=lambda i: (self.path[i][0] - x) ** 2
-                             + (self.path[i][1] - y) ** 2
-            )
-
-            # Recover globally if the local result is over 2 m away.
-            distance_sq = (
-                (self.path[nearest][0] - x) ** 2
-                + (self.path[nearest][1] - y) ** 2
-            )
-            if distance_sq > 4.0:
-                nearest = min(
-                    range(n),
-                    key=lambda i: (self.path[i][0] - x) ** 2
-                                 + (self.path[i][1] - y) ** 2
-                )
-
-        self.last_index = nearest
-
-        # Choose a lookahead distance, increasing slightly with speed.
-        lookahead = max(1.1, 1.1 + 0.3 * abs(speed))
-        target_index = nearest
-        travelled = 0.0
-
-        while travelled < lookahead:
-            next_index = (target_index + 1) % n
-            x1, y1 = self.path[target_index]
-            x2, y2 = self.path[next_index]
-            travelled += math.hypot(x2 - x1, y2 - y1)
-            target_index = next_index
-
-            if target_index == nearest:
-                break
-
-        tx, ty = self.path[target_index]
-        dx, dy = tx - x, ty - y
-
-        # Angle from the vehicle's forward direction to the target point.
-        alpha = math.atan2(
-            -math.sin(yaw) * dx + math.cos(yaw) * dy,
-            math.cos(yaw) * dx + math.sin(yaw) * dy
-        )
-
-        # Pure-pursuit steering angle.
-        distance = max(math.hypot(dx, dy), 0.01)
-        delta = math.atan2(
-            2.0 * self.WHEELBASE * math.sin(alpha),
-            distance
-        )
-
-        # Convert radians to the simulator's normalised steering command.
-        steering = delta / self.MAX_STEERING_RAD
-        steering = max(-1.0, min(1.0, steering))
-
-        window = 5
-        upcoming_speeds = [
-            self.speed_profile[(nearest + offset) % n]
-            for offset in range (window + 1)
-        ]
-        profile_speed = min(upcoming_speeds)
-        target_speed = min(self.target_speed, profile_speed)
-
-        return steering, target_speed
+        x, y   [m]    ground-truth position from /odom (world frame)
+        yaw    [rad]  heading
+        speed  [m/s]  current speed
+        steering is in [-1, 1], positive = left.
+        """
+        return 0.0, self.crawl_speed
 
     def path_ahead(self, x, y, yaw, n):
-        """Return the next n centreline points in world coordinates."""
-        if n <= 0:
-            return []
-
-        path_length = len(self.path)
-
-        if self.last_index is None:
-            nearest = min(
-                range(path_length),
-                key=lambda i: (self.path[i][0] - x) ** 2
-                             + (self.path[i][1] - y) ** 2
-            )
-        else:
-            window = 20
-            candidates = {
-                (self.last_index + offset) % path_length
-                for offset in range(-window, window + 1)
-            }
-
-            nearest = min(
-                candidates,
-                key=lambda i: (self.path[i][0] - x) ** 2
-                             + (self.path[i][1] - y) ** 2
-            )
-
-            distance_sq = (
-                (self.path[nearest][0] - x) ** 2
-                + (self.path[nearest][1] - y) ** 2
-            )
-
-            if distance_sq > 4.0:
-                nearest = min(
-                    range(path_length),
-                    key=lambda i: (self.path[i][0] - x) ** 2
-                                 + (self.path[i][1] - y) ** 2
-                )
-
-        self.last_index = nearest
-
-        return [
-            self.path[(nearest + offset) % path_length]
-            for offset in range(1, n + 1)
-        ]
+        """Return the next `n` points of the line as [(x, y), ...] in the
+        WORLD frame. Role 5 uses them to check whether the line is blocked.
+        Stub: no path."""
+        return []
