@@ -111,7 +111,7 @@ class Driver(Node):
         self.reactive = Reactive(max_range=self.max_range)
         self.planner = Planner(
             "/hackathon/maps/icra26_compete_racingline_apex_reconstructed.csv",
-            target_speed=3.5,
+            target_speed=7.0,
         )
         self.safety = Safety()
         self.speed_ctrl = SpeedController()
