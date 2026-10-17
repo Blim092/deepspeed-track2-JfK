@@ -80,7 +80,7 @@ class Driver(Node):
         # Defaults live in code. Retune from the command line if you like:
         #   ros2 run team_driver driver --ros-args -p mode:=planner
         self.declare_parameter('vehicle_ns', '/autodrive/roboracer_1')
-        self.declare_parameter('mode', 'reactive')           # or 'planner'
+        self.declare_parameter('mode', 'planner')           # or 'planner'
         self.declare_parameter('max_range', 10.0)            # [m] clip the scan
         self.declare_parameter('fault_throttle', 0.0)        # used if a step raises
         self.declare_parameter('callback_budget_s', 0.025)   # 40 Hz = 25 ms
@@ -109,7 +109,10 @@ class Driver(Node):
 
         # The four modules, each owned by one teammate.
         self.reactive = Reactive(max_range=self.max_range)
-        self.planner = Planner()
+        self.planner = Planner(
+            "/hackathon/maps/icra26_compete_racingline_apex_reconstructed.csv",
+            target_speed=7.0,
+        )
         self.safety = Safety()
         self.speed_ctrl = SpeedController()
 
@@ -120,10 +123,7 @@ class Driver(Node):
         self.filtered_speed = 0.0
         self.last_steering = 0.0
 
-        self.planner = Planner(
-            "/hackathon/maps/icra26_compete_centerline.csv",
-            target_speed=0.5,
-        )
+
 
         self._last_t = None
         self._source = None

@@ -22,6 +22,7 @@ def build_speed_profile(
     max_brake=MAX_BRAKE,
     max_speed=MAX_SPEED,
     smoothing_window=CURVATURE_WINDOW,
+    corner_zones=None,
 ):
     """Return (curvature, speed_limit) arrays for a closed path."""
     n = len(path)
@@ -70,14 +71,32 @@ def build_speed_profile(
             / (2 * w + 1)
         )
 
-    # Cornering speed limit: v = sqrt(a_lat / |curvature|).
+    # Per-waypoint lateral acceleration limits. Zones override only their own
+    # waypoint range; every other waypoint keeps max_lateral_accel.
+    # corner_zones: [(name, start_index, end_index, lateral_acceleration), ...]
+    lateral_limits = [float(max_lateral_accel)] * n
+    used_indices = set()
+    for name, start, end, limit in (corner_zones or ()):
+        if not (isinstance(start, int) and isinstance(end, int)):
+            raise ValueError(f"{name}: corner indices must be integers")
+        if not (0 <= start <= end < n):
+            raise ValueError(f"{name}: expected 0 <= start <= end < {n}")
+        if not math.isfinite(limit) or limit <= 0:
+            raise ValueError(f"{name}: lateral acceleration must be positive")
+        for i in range(start, end + 1):
+            if i in used_indices:
+                raise ValueError(f"{name}: overlapping corner zone at index {i}")
+            used_indices.add(i)
+            lateral_limits[i] = float(limit)
+
+    # Cornering speed limit: v = sqrt(local_a_lat / |curvature|).
     speeds = []
-    for kappa in curvature:
+    for i, kappa in enumerate(curvature):
         if abs(kappa) < 1e-6:
             speeds.append(max_speed)
         else:
             speeds.append(
-                min(max_speed, math.sqrt(max_lateral_accel / abs(kappa)))
+                min(max_speed, math.sqrt(lateral_limits[i] / abs(kappa)))
             )
 
     # Repeat around the loop until both constraints converge.
