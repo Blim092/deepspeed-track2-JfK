@@ -19,9 +19,8 @@ class Planner:
         ("C3 entry",      177, 184, 7.05),
         ("C3 tight turn", 185, 199, 6.75),
         ("C4 approach", 210, 219, 5.00),
-        ("C4 upper sweeping turn", 220, 271, 14.85),
-        ("C4 continuation",         0,   10, 13.50),
-        ("Straight Part",         11,   40, 17.50)
+        ("C4 upper sweeping turn", 220, 271, 11.85),
+        ("C4 continuation",         0,   40, 17.50)
     )
     EXPECTED_WAYPOINTS = 272
 
@@ -54,7 +53,7 @@ class Planner:
         self.curvature, self.speed_profile = build_speed_profile(
             self.path,
             max_lateral_accel=2.25,
-            max_accel=1.6,
+            max_accel=1.8,
             max_brake=1.05,
             max_speed=7.0,
             corner_zones=self.CORNER_ZONES,
