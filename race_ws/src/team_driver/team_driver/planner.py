@@ -25,8 +25,13 @@ class Planner:
         self.target_speed = float(target_speed)
         self.last_index = None
 
-        self.curvature, self.speed_profile = build_speed_profile(self.path)
-
+        self.curvature, self.speed_profile = build_speed_profile(
+            self.path,
+            max_lateral_accel=0.65,
+            max_accel=1.2,
+            max_brake=0.65,
+            max_speed=3.5,
+        )
     def step(self, x, y, yaw, speed):
         """Return (normalised steering, target speed)."""
         n = len(self.path)
