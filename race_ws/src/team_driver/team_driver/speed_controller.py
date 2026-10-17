@@ -9,16 +9,23 @@ name and the two method signatures: the driver and your teammates rely on them.
 When the real controller is in, set IS_STUB = False.
 """
 
-IS_STUB = True
+IS_STUB = False
 
 
 class SpeedController:
 
-    def __init__(self, ff_throttle_per_mps=0.12, max_throttle=0.2):
+    def __init__(self, ff_throttle_per_mps=0.04, max_throttle=1.0):
         # PLACEHOLDERS, NOT MEASURED. 0.12 per m/s reproduces the template's
         # constant crawl throttle (0.12) at a 1.0 m/s target. Role 2 replaces
         # these with the identified throttle-to-speed relationship.
         self.ff_throttle_per_mps = ff_throttle_per_mps
+        
+
+        self.kp = 0.20
+        self.ki = 0.03
+
+        self.max_int = 0.10
+        self.int_err = 0.0
         self.max_throttle = max_throttle
 
     def step(self, target_speed, measured_speed, dt):
@@ -28,9 +35,25 @@ class SpeedController:
         measured_speed [m/s]  hypot of /odom linear velocity
         dt             [s]    time since the previous call (message time)
         """
-        throttle = self.ff_throttle_per_mps * max(0.0, target_speed)
-        return min(self.max_throttle, throttle)
+        if target_speed<=0:
+            self.reset()
+            return 0.0
+        err = target_speed-measured_speed
+        if err < 0.0: self.int_err = max(0.0, self.int_err + err * dt)
+        else: self.int_err += err*dt
+        self.int_err = max(-self.max_int, min(self.max_int, self.int_err))
+
+        
+
+        ff = self.ff_throttle_per_mps * target_speed
+        p_out = self.kp * err
+        i_out = self.ki * self.int_err
+        
+        throttle = ff + p_out + i_out
+        
+        return float(max(-1.0, min(self.max_throttle, throttle)))
 
     def reset(self):
         """Clear internal state (the integral). Called when a run restarts."""
+        self.int_err = 0.0
         pass
