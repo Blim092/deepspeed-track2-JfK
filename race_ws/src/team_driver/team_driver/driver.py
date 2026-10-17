@@ -109,7 +109,15 @@ class Driver(Node):
 
         # The four modules, each owned by one teammate.
         self.reactive = Reactive(max_range=self.max_range)
-        self.planner = Planner()
+        self.declare_parameter('path_csv',
+                               '/hackathon/maps/icra26_compete_centerline.csv')
+        try:
+            self.planner = Planner(str(self.get_parameter('path_csv').value))
+        except Exception as exc:
+            self.get_logger().error(
+                f'planner failed to load, using reactive only: {exc!r}')
+            self.planner = None
+            self.mode = 'reactive'
         self.safety = Safety()
         self.speed_ctrl = SpeedController()
 
