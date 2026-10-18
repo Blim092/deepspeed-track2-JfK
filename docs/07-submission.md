@@ -121,12 +121,15 @@ fast, and none of the times it prints are scored.
 ## 7.3 `SUBMISSION.md` template
 
 ```markdown
-# Team <name>
+# Team JfK
 
 ## Members
 | Name | Matric number | Email |
-| --- | --- | --- |
-| ... | ... | ... |
+| Kow Zi Heng Nicholas | U2620646J | zkow002@e.ntu.edu.sg |
+| Benjamin Lim | U2620145L | blim092@e.ntu.edu.sg |
+| Chok Jun Xian | U2620924L | jchok002@e.ntu.edu.sg |
+| Liew Cheng Hou | U26 | liew0266@e.ntu.edu.sg |
+| Kam Wei Hong | U2623105F | wkam002@e.ntu.edu.sg |
 
 ## Approach
 Two or three paragraphs: what your driver does, why you chose it, what you
