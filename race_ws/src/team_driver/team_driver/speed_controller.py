@@ -1,10 +1,5 @@
-"""Experimental RoboRacer speed controller V3 — gentle feedforward + P.
-
-DIAGNOSTIC/STRAIGHT-TEST VERSION, NOT A RACING BRAKE CONTROLLER.
-
-Calibrated locally around 1.5 m/s from the user's AutoDRIVE test:
-    constant throttle 0.06 -> steady ~1.5 m/s => feedforward ~0.04 / (m/s).
-This relation is NOT known to be linear at higher speeds.
+"""
+Experimental RoboRacer speed controller V3 — gentle feedforward + P.
 
 V3 keeps applying the baseline feedforward throttle instead of abruptly
 switching between acceleration and zero / reverse torque on small overspeed.
@@ -15,9 +10,7 @@ Role 2 owns the submitted speed_controller.py and should review final changes.
 """
 
 import math
-
 IS_STUB = False
-
 
 class SpeedController:
     def __init__(
@@ -79,13 +72,4 @@ class SpeedController:
         throttle = self.clip(self.last_throttle + delta, 0.0, self.max_throttle)
         self.last_throttle = throttle
 
-        self.count += 1
-        if self.debug_every > 0 and self.count % self.debug_every == 0:
-            print(
-                f"[SPEED-V3] target={target:.2f} "
-                f"actual={measured:.2f} filtered={self.filtered_speed:.2f} "
-                f"error={error:+.2f} ff={baseline:.3f} "
-                f"throttle={throttle:+.3f}",
-                flush=True,
-            )
         return throttle

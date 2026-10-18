@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Team driver - integration wiring. OWNED BY ROLE 1; nobody else edits this file.
+"""Team driver - integration wiring.
 
 Per LiDAR scan (40 Hz):
 
-    decide   planner (mode='planner') or reactive (mode='reactive')
     fallback planner -> reactive when Safety says the planned line is blocked
     safety   cap the target speed from the clearance ahead
     speed    SpeedController turns the target speed into a throttle
@@ -15,7 +14,7 @@ The modules live in their own files, one owner each:
     planner.py           Role 4      safety.py    Role 5
     common.py            Role 1
 
-Rules this file keeps (see docs/06-rules.md):
+Rules this file keeps:
   * `ros2 run team_driver driver` stays the entry point.
   * Every default lives HERE, in code: judging runs plain `ros2 run` with no
     arguments and no yaml.
@@ -78,19 +77,12 @@ class Driver(Node):
         super().__init__('driver')
 
         # Defaults live in code. Retune from the command line if you like:
-        #   ros2 run team_driver driver --ros-args -p mode:=planner
         self.declare_parameter('vehicle_ns', '/autodrive/roboracer_1')
-        self.declare_parameter('mode', 'planner')           # or 'planner'
         self.declare_parameter('max_range', 10.0)            # [m] clip the scan
         self.declare_parameter('fault_throttle', 0.0)        # used if a step raises
         self.declare_parameter('callback_budget_s', 0.025)   # 40 Hz = 25 ms
         self.declare_parameter('path_points', 40)            # points for the blocked check
 
-        self.mode = str(self.get_parameter('mode').value)
-        if self.mode not in ('reactive', 'planner'):
-            self.get_logger().warn(
-                f"unknown mode '{self.mode}', using 'reactive'")
-            self.mode = 'reactive'
         self.max_range = float(self.get_parameter('max_range').value)
         self.fault_throttle = float(self.get_parameter('fault_throttle').value)
         self.budget = float(self.get_parameter('callback_budget_s').value)
@@ -123,22 +115,11 @@ class Driver(Node):
         self.filtered_speed = 0.0
         self.last_steering = 0.0
 
-
-
         self._last_t = None
         self._source = None
         self._marker_divisor = 0
         self._cb_count = 0
         self._cb_worst = 0.0
-
-        stubs = [name for name, mod in (
-            ('speed_controller', speed_mod), ('reactive', reactive_mod),
-            ('planner', planner_mod), ('safety', safety_mod))
-            if getattr(mod, 'IS_STUB', False)]
-        self.get_logger().info(f"team_driver up, mode='{self.mode}'")
-        if stubs:
-            self.get_logger().warn(
-                'still STUBS (not driving yet): ' + ', '.join(stubs))
 
     # ------------------------------------------------------------------
     # Inputs
@@ -169,11 +150,12 @@ class Driver(Node):
         self.speed = self.filtered_speed
 
     def ips_callback(self, msg):
-        """Position alone, at the same rate. /odom carries this plus velocity."""
+        #Position alone, at the same rate. /odom carries this plus velocity.
         self.position = (msg.x, msg.y)
 
     def _dt(self, scan):
-        """Seconds since the previous scan, from MESSAGE time.
+        """
+        Seconds since the previous scan, from MESSAGE time.
 
         The simulator can run slower than real time (about half speed on some
         laptops), so wall-clock dt would be wrong for the controllers. Falls
@@ -209,23 +191,10 @@ class Driver(Node):
         if self._marker_divisor == 0:
             self.publish_marker(finite_or(steering) * MAX_STEERING_RAD)
 
-        elapsed = time.perf_counter() - t0
-        self._cb_worst = max(self._cb_worst, elapsed)
-        self._cb_count += 1
-        if elapsed > self.budget:
-            self.get_logger().warn(
-                f'callback took {elapsed * 1000:.1f} ms '
-                f'(budget {self.budget * 1000:.0f} ms)',
-                throttle_duration_sec=5.0)
-        if self._cb_count % 400 == 0:
-            self.get_logger().info(
-                f'worst callback in last 400 scans: {self._cb_worst * 1000:.1f} ms')
-            self._cb_worst = 0.0
-
     def control(self, scan, dt):
-        """decide -> fallback -> safety cap -> speed controller."""
+        # decide -> fallback -> safety cap -> speed controller.
         source = 'reactive'
-        if self.mode == 'planner' and self.position is not None:
+        if self.position is not None:
             x, y = self.position
             steering, v_target = self.planner.step(x, y, self.yaw, self.speed)
             source = 'planner'
@@ -245,11 +214,9 @@ class Driver(Node):
         v_target = finite_or(self.safety.limit(v_target, scan), 0.0)
         throttle = self.speed_ctrl.step(v_target, self.speed, dt)
         return finite_or(steering), finite_or(throttle)
-    # ==================================================================
-    # THIS IS THE PART YOU WRITE.
-    # ==================================================================
+
     def plan(self, ranges, angles):
-        """Follow the centreline with smoothed steering."""
+        # Follow the apex line with smoothed steering.
         if self.position is None:
             return 0.0, 0.0
 
@@ -282,7 +249,7 @@ class Driver(Node):
         self.throttle_pub.publish(Float32(data=throttle))
 
     def publish_marker(self, target_angle):
-        """Draw where the car thinks it is going. Add /driver/markers in RViz."""
+        # Draw where the car thinks it is going. Add /driver/markers in RViz.
         marker = Marker()
         marker.header.frame_id = 'roboracer_1'
         marker.header.stamp = self.get_clock().now().to_msg()

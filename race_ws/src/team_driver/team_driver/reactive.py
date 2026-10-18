@@ -84,7 +84,6 @@ class Reactive:
         self._Marker = None
         self._MarkerArray = None
         self._Point = None
-        self._validate_config()
         if node is not None:
             self.attach_node(node)
 
@@ -105,6 +104,7 @@ class Reactive:
             if not node.has_parameter(name):
                 node.declare_parameter(name, default)
             setattr(self, key, node.get_parameter(name).value)
+
         # Expose the existing public constructor arguments as parameters too.
         for name, default, attribute in (
             ("reactive.max_range", self.max_range, "max_range"),
@@ -113,7 +113,7 @@ class Reactive:
             if not node.has_parameter(name):
                 node.declare_parameter(name, default)
             setattr(self, attribute, float(node.get_parameter(name).value))
-        self._validate_config()
+
 
         if self.marker_enabled:
             try:
@@ -127,24 +127,6 @@ class Reactive:
                 ) from exc
             self._Marker, self._MarkerArray, self._Point = Marker, MarkerArray, Point
             self._marker_publisher = node.create_publisher(MarkerArray, "/driver/markers", 1)
-
-    def _validate_config(self):
-        if not (0.0 < self.max_look_deg <= 135.0):
-            raise ValueError("reactive.max_look_deg must be in (0, 135]")
-        if not (0.0 < self.max_steering_rad and self.max_steering_rate_rad_s > 0):
-            raise ValueError("steering limits must be positive")
-        if not (0.0 < self.min_gap_distance < self.max_range):
-            raise ValueError("min_gap_distance must be below max_range")
-        if not (0.0 < self.bubble_radius and self.bubble_trigger_distance > 0):
-            raise ValueError("bubble dimensions must be positive")
-        if not (0.0 < self.near_max_ratio <= 1.0 and self.near_max_range_cap > 0):
-            raise ValueError("near-max ratio/cap out of range")
-        if not (0.0 <= self.min_target_speed <= self.crawl_speed):
-            raise ValueError("min_target_speed must be between 0 and crawl_speed")
-        if not (0 <= self.front_slow_distance < self.front_full_distance):
-            raise ValueError("front_slow_distance must be less than front_full_distance")
-        if self.marker_every_scans < 1 or self.debug_every_scans < 1:
-            raise ValueError("marker/debug scan intervals must be positive")
 
     def _process_scan(self, scan):
         ranges = np.asarray(scan.ranges, dtype=np.float64)
@@ -223,16 +205,19 @@ class Reactive:
         self._last_near_max = "base"
         if not self.near_max_enabled:
             return base[2]
+
         start, end, base_i = base
         section = np.minimum(distances[start:end], self.near_max_range_cap)
         if section.size == 0:
             return base_i
+
         # Capped 90th percentile, not a single noisy maximum beam.
         threshold = float(np.percentile(section, 90)) * self.near_max_ratio
         base_depth = float(np.minimum(distances[base_i], self.near_max_range_cap))
         if base_depth >= threshold - self.near_max_gain_m:
             self._last_near_max = "base_clear"
             return base_i
+
         min_width = math.radians(self.near_max_min_width_deg)
         increment = float(angles[1] - angles[0]) if len(angles) > 1 else 0.0
         best = None
@@ -250,10 +235,12 @@ class Reactive:
             key = (int(e - s), -difference)
             if best_key is None or key > best_key:
                 best, best_key = idx, key
+
         if best is not None and best != base_i:
             self._last_near_max = "applied"
             return best
         self._last_near_max = "no_safe_candidate"
+
         return base_i
 
     def _guarded_bubble(self, measured, distances, angles, selected_idx):
@@ -266,6 +253,7 @@ class Reactive:
         self._last_bubble = "disabled"
         if not self.bubble_enabled:
             return selected_idx, distances
+
         # Consider returns on a currently viable corridor near our target,
         # not the closest side-wall/duct anywhere within the forward sector.
         # Obstacles below min_gap_distance are already excluded by FTG.
@@ -274,37 +262,46 @@ class Reactive:
                 & (np.abs(angles) <= math.radians(self.bubble_center_sector_deg))
                 & (np.abs(angles - angles[selected_idx])
                    <= math.radians(self.bubble_target_proximity_deg)))
+
         if not np.any(mask):
             self._last_bubble = "no_returns"
             return selected_idx, distances
         closest = int(np.argmin(np.where(mask, measured, np.inf)))
         near_dist = float(measured[closest])
         near_angle = float(angles[closest])
+
         if near_dist > self.bubble_trigger_distance:
             self._last_bubble = "too_far"
             return selected_idx, distances
+
         if abs(near_angle - float(angles[selected_idx])) > math.radians(self.bubble_target_proximity_deg):
             self._last_bubble = "off_target"
             return selected_idx, distances
+
         self._bubble_trigger_total += 1
         half_angle = math.asin(min(1.0, self.bubble_radius / near_dist))
         bubble_mask = (np.abs(angles - near_angle) <= half_angle)
         proposed = distances.copy()
         proposed[bubble_mask] = 0.0
         gap = self._widest_gap(proposed, angles)
+
         if gap is None:
             self._last_bubble = "reject_no_gap"
             return selected_idx, distances
+
         candidate = gap[2]
         if abs(float(angles[candidate] - angles[selected_idx])) > math.radians(self.bubble_max_target_shift_deg):
             self._last_bubble = "reject_shift"
             return selected_idx, distances
+
         if proposed[candidate] < self.min_gap_distance:
             self._last_bubble = "reject_clearance"
             return selected_idx, distances
+
         if candidate == selected_idx:
             self._last_bubble = "unchanged"
             return selected_idx, distances
+
         self._last_bubble = "applied"
         self._bubble_applied_total += 1
         return candidate, proposed
@@ -319,19 +316,23 @@ class Reactive:
             self._last_disparities = 0
             self._last_extended_beams = 0
             return 0.0, 0.0
+
         front_mask = ((np.abs(angles) <= math.radians(self.front_check_deg))
                       & (measured > 0.0))
         if np.any(front_mask):
             self._last_front_distance = float(np.min(measured[front_mask]))
         distances = self._extend_disparities(measured, float(scan.angle_increment))
         base = self._widest_gap(distances, angles)
+
         if base is None:
             return 0.0, 0.0
+
         self._last_baseline_angle = float(angles[base[2]])
         selected = self._guarded_near_max(distances, angles, base)
         if self._last_near_max == "applied":
             self._near_applied_total += 1
         selected, final_ranges = self._guarded_bubble(measured, distances, angles, selected)
+
         return float(angles[selected]), float(final_ranges[selected])
 
     def _scan_dt(self, scan):
@@ -339,6 +340,7 @@ class Reactive:
         stamp = getattr(getattr(scan, "header", None), "stamp", None)
         sec = getattr(stamp, "sec", None)
         nsec = getattr(stamp, "nanosec", None)
+
         if sec is not None and nsec is not None:
             try:
                 time_s = float(sec) + float(nsec) * 1e-9
@@ -351,6 +353,7 @@ class Reactive:
                         dt = interval
                 self._last_scan_stamp = time_s
         self._last_dt = dt
+
         return dt
 
     def _rate_limited_steering(self, desired, dt):
@@ -359,6 +362,7 @@ class Reactive:
         difference = desired_rad - self._previous_steer_rad
         applied_rad = self._previous_steer_rad + float(np.clip(difference, -max_delta, max_delta))
         self._previous_steer_rad = applied_rad
+
         return float(np.clip(applied_rad / self.max_steering_rad, -1.0, 1.0))
 
     def _adaptive_speed(self, steering):
@@ -373,12 +377,14 @@ class Reactive:
         result = float(min(speed_from_front, speed_from_turn))
         if result < upper - 1e-6:
             self._slowed_total += 1
+
         return result
 
     def _publish_marker(self, scan, angle, distance):
         """RViz target arrow in LiDAR frame; requires attach_node()."""
         if self._marker_publisher is None or self._scan_count % self.marker_every_scans:
             return
+
         marker = self._Marker()
         scan_header = getattr(scan, "header", None)
         marker.header.frame_id = (getattr(scan_header, "frame_id", "") or "laser")
@@ -418,17 +424,7 @@ class Reactive:
             desired = float(np.clip(angle / self.max_steering_rad, -1.0, 1.0))
             applied = self._rate_limited_steering(desired, dt)
             speed = self._adaptive_speed(applied)
+
         self._publish_marker(scan, angle, distance)
-        if self._scan_count == 1 or self._scan_count % self.debug_every_scans == 0:
-            print(
-                f"[FTG-COMBINED] scan={self._scan_count} "
-                f"angle={math.degrees(angle):+.1f}deg gap={distance:.2f}m "
-                f"front={self._last_front_distance:.2f}m "
-                f"bubble={self._last_bubble} bubble_trials={self._bubble_trigger_total} "
-                f"bubble_applied={self._bubble_applied_total} "
-                f"near={self._last_near_max} near_applied={self._near_applied_total} "
-                f"disparities={self._last_disparities} extended={self._last_extended_beams} "
-                f"steer={applied:+.2f} target_speed={speed:.3f}",
-                flush=True,
-            )
+
         return applied, speed

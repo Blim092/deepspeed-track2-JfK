@@ -5,9 +5,7 @@ it and it can be unit-tested without ROS.
 """
 
 import math
-
 import numpy as np
-
 
 def clean_scan(scan, max_range=10.0):
     """Turn a raw LaserScan message into clean ranges plus each beam's angle.
@@ -20,8 +18,8 @@ def clean_scan(scan, max_range=10.0):
     ranges = np.nan_to_num(ranges, nan=0.0, posinf=max_range, neginf=0.0)
     ranges = np.clip(ranges, 0.0, max_range)
     angles = scan.angle_min + np.arange(len(ranges)) * scan.angle_increment
-    return ranges, angles
 
+    return ranges, angles
 
 def world_to_car(points, x, y, yaw):
     """Express world-frame (x, y) points in the car frame.
@@ -36,8 +34,8 @@ def world_to_car(points, x, y, yaw):
     for px, py in points:
         dx, dy = px - x, py - y
         out.append((c * dx + s * dy, -s * dx + c * dy))
-    return out
 
+    return out
 
 def finite_or(value, default=0.0):
     """Return float(value) if it is a finite number, otherwise `default`."""
@@ -45,4 +43,6 @@ def finite_or(value, default=0.0):
         v = float(value)
     except (TypeError, ValueError):
         return default
+
     return v if math.isfinite(v) else default
+

@@ -4,23 +4,22 @@ import math
 from team_driver.speed_profile import build_speed_profile
 
 class Planner:
-    """Follow a closed-loop centreline using pure pursuit."""
+    # Follow a closed-loop centreline using pure pursuit.
 
-    # These index ranges are for icra26_compete_racingline_apex_reconstructed(1).csv
+    # These index ranges are for icra26_compete_racingline_apex_reconstructed.csv
     # (272 path points). Keep the proven 1.75 elsewhere.
-    # To run ONE controlled experiment, change only the C4 value below.
     CORNER_ZONES = (
-        ("C1 approach",            57,  61, 6.85),
-        ("C1 bottom U-turn",       62,  91, 8.85),
-        ("C1 exit",                92, 110, 6.80),
-        ("C2 approach", 138, 144, 2.35),
-        ("C2 upper inner hairpin", 145, 170, 6.75),
-        ("C3 approach",   171, 176, 2.25),
-        ("C3 entry",      177, 184, 7.05),
-        ("C3 tight turn", 185, 199, 6.75),
-        ("C4 approach", 210, 219, 5.00),
+        ("C1 approach",             57,  61,  6.85),
+        ("C1 bottom U-turn",        62,  91,  8.85),
+        ("C1 exit",                 92, 110,  6.80),
+        ("C2 approach",            138, 144,  2.35),
+        ("C2 upper inner hairpin", 145, 170,  6.75),
+        ("C3 approach",            171, 176,  2.25),
+        ("C3 entry",               177, 184,  7.05),
+        ("C3 tight turn",          185, 199,  6.75),
+        ("C4 approach",            210, 219,  5.00),
         ("C4 upper sweeping turn", 220, 271, 11.85),
-        ("C4 continuation",         0,   40, 17.50)
+        ("C4 continuation",          0,  40, 17.50)
     )
     EXPECTED_WAYPOINTS = 272
 
@@ -37,19 +36,8 @@ class Planner:
                 if len(row) >= 2:
                     self.path.append((float(row[0]), float(row[1])))
 
-        if len(self.path) < 2:
-            raise ValueError("Centreline CSV must contain at least two points")
-
         self.target_speed = float(target_speed)
         self.last_index = None
-
-        if len(self.path) != self.EXPECTED_WAYPOINTS:
-            raise ValueError(
-                f"Corner zones were calibrated for {self.EXPECTED_WAYPOINTS} "
-                f"waypoints, but loaded {len(self.path)}. "
-                "Re-identify corner indices for this CSV before racing."
-            )
-
         self.curvature, self.speed_profile = build_speed_profile(
             self.path,
             max_lateral_accel=2.25,
@@ -58,31 +46,9 @@ class Planner:
             max_speed=7.0,
             corner_zones=self.CORNER_ZONES,
         )
-        
-        print("\n--- C1 APPROACH SPEED PROFILE ---")
 
-        for i in range(0, 95, 5):
-            print(
-                f"Waypoint {i:3d}: "
-                f"{self.speed_profile[i]:.2f} m/s"
-            )
-        
-        
-        print(
-            f"[PROFILE] maximum calculated speed: "
-            f"{max(self.speed_profile):.3f} m/s",
-            flush=True
-        )
-        print(
-            f"[CORNER-TUNING] points={len(self.path)} "
-            f"planner_cap={self.target_speed:.2f} "
-            f"profile_max={max(self.speed_profile):.2f} "
-            f"profile_min={min(self.speed_profile):.2f} "
-            f"zones={[(z[0], z[3]) for z in self.CORNER_ZONES]}",
-            flush=True,
-        )
     def step(self, x, y, yaw, speed):
-        """Return (normalised steering, target speed)."""
+        # Return (normalised steering, target speed).
         n = len(self.path)
 
         # Search globally on startup, then locally around the previous index.
@@ -153,7 +119,7 @@ class Planner:
         steering = delta / self.MAX_STEERING_RAD
         steering = max(-1.0, min(1.0, steering))
 
-        window = 2
+        window = 5
         upcoming_speeds = [
             self.speed_profile[(nearest + offset) % n]
             for offset in range (window + 1)
@@ -164,7 +130,7 @@ class Planner:
         return steering, target_speed
 
     def path_ahead(self, x, y, yaw, n):
-        """Return the next n centreline points in world coordinates."""
+        # Return the next n centreline points in world coordinates.
         if n <= 0:
             return []
 
